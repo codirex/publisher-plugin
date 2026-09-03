@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Axiom Demo</string>
+    <string name="run_demo">Run library demo</string>
+    <string name="share_result">Share result</string>
+    <string name="initial_message">Tap \"Run library demo\" to exercise axiom-base, axiom-collections, axiom-concurrent, and axiom-android together.</string>
+</resources>

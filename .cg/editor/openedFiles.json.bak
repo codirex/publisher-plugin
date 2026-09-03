@@ -1,0 +1,21 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/Codirex Libraries/publisher/lib/src/main/java/org/codirex/publisher/PublisherPlugin.kt",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    }
+  ],
+  "projectPath": "/storage/emulated/0/Codirex Libraries/publisher",
+  "selectedFile": "/storage/emulated/0/Codirex Libraries/publisher/lib/src/main/java/org/codirex/publisher/PublisherPlugin.kt"
+}
