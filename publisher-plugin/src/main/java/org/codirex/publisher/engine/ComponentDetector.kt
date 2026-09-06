@@ -30,6 +30,30 @@ enum class ComponentType { ANDROID_LIBRARY, JAVA_LIBRARY, KOTLIN_MULTIPLATFORM, 
 class ComponentDetector(private val project: Project) {
 
     companion object {
+        /**
+         * Gradle property (`gradle.properties` / `-P`), not a DSL option:
+         * Android component preparation fires eagerly at `apply()` time (see
+         * class kdoc above), well before the `publisher { }` block in the
+         * build script body has even run - so a DSL flag can't be read yet
+         * at the point this decision needs to be made.
+         *
+         * Set `org.codirex.publisher.skipAndroidJavadoc=true` if you hit
+         * AGP's own Dokka-based javadoc generation crashing - a known
+         * AGP+Dokka/ASM incompatibility with some modern bytecode (e.g.
+         * `PermittedSubclasses requires ASM9` against a Kotlin sealed
+         * class), unrelated to this plugin's or your own module's Kotlin
+         * version. Sources jar is unaffected either way; when this is set,
+         * [org.codirex.publisher.engine.MavenPublishOrchestrator] attaches a
+         * plain empty javadoc jar instead of AGP's, since Central still
+         * expects one to be *present* even though it won't have real content.
+         */
+        const val SKIP_ANDROID_JAVADOC_PROPERTY = "org.codirex.publisher.skipAndroidJavadoc"
+
+        fun skipAndroidJavadoc(project: Project): Boolean =
+            project.providers.gradleProperty(SKIP_ANDROID_JAVADOC_PROPERTY)
+                .map { it.toBoolean() }
+                .getOrElse(false)
+
         fun registerEagerPreparation(project: Project) {
             project.plugins.withId("com.android.library") {
                 ComponentDetector(project).prepareAndroidLibrary()
@@ -54,9 +78,10 @@ class ComponentDetector(private val project: Project) {
 
     fun prepareAndroidLibrary() {
         val android = project.extensions.getByType(LibraryExtension::class.java)
+        val skipJavadoc = skipAndroidJavadoc(project)
         android.publishing.singleVariant("release") {
             withSourcesJar()
-            withJavadocJar()
+            if (!skipJavadoc) withJavadocJar()
         }
     }
 

@@ -9,6 +9,7 @@ import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.bundling.Jar
 
 /**
  * Applies `maven-publish` and wires up a publication for whichever component
@@ -53,7 +54,12 @@ class MavenPublishOrchestrator(
         project.extensions.configure(PublishingExtension::class.java) { publishing ->
             when (componentType) {
                 ComponentType.KOTLIN_MULTIPLATFORM -> configureKotlinMultiplatform(publishing)
-                ComponentType.ANDROID_LIBRARY -> configureSingleComponent(publishing, "release")
+                ComponentType.ANDROID_LIBRARY -> {
+                    configureSingleComponent(publishing, "release")
+                    if (ComponentDetector.skipAndroidJavadoc(project)) {
+                        attachEmptyJavadocJar(publishing, "release")
+                    }
+                }
                 ComponentType.JAVA_LIBRARY -> configureSingleComponent(publishing, "java")
                 ComponentType.UNKNOWN -> Unit // handled above
             }
@@ -61,6 +67,24 @@ class MavenPublishOrchestrator(
             registerCentralRepository(publishing)
             registerGithubRepository(publishing)
             // MAVEN_LOCAL needs no repository - maven-publish provides publishToMavenLocal for free.
+        }
+    }
+
+    /**
+     * Substitutes a plain, empty (but present) javadoc jar for AGP's own
+     * Dokka-based one - see [ComponentDetector.SKIP_ANDROID_JAVADOC_PROPERTY].
+     * Central expects a javadoc jar artifact to exist; it doesn't inspect
+     * its contents, so an empty one satisfies that requirement without
+     * routing through AGP's Dokka integration at all.
+     */
+    private fun attachEmptyJavadocJar(publishing: PublishingExtension, publicationName: String) {
+        val taskName = "emptyJavadocJarFor${publicationName.replaceFirstChar { it.uppercase() }}"
+        val emptyJavadocJar = project.tasks.register(taskName, Jar::class.java) { jar ->
+            jar.archiveClassifier.set("javadoc")
+            jar.archiveBaseName.set(extension.artifactId.ifBlank { project.name })
+        }
+        publishing.publications.named(publicationName, MavenPublication::class.java) { publication ->
+            publication.artifact(emptyJavadocJar)
         }
     }
 

@@ -105,7 +105,7 @@ class PublisherPlugin : Plugin<Project> {
         ) { task ->
             val isSnapshot = extension.isSnapshot
             task.centralEnabled.set(PublishTarget.MAVEN_CENTRAL in targets)
-            task.snapshot.set(isSnapshot)
+            task.isSnapshot.set(isSnapshot)
             task.dryRun.set(extension.dryRun)
             task.autoPublish.set(extension.targets.centralAutoPublish)
             task.artifactId.set(extension.artifactId)

@@ -33,7 +33,7 @@ abstract class PublishToCentralTask @Inject constructor(
 ) : DefaultTask() {
 
     @get:Internal abstract val centralEnabled: Property<Boolean>
-    @get:Internal abstract val snapshot: Property<Boolean>
+    @get:Internal abstract val isSnapshot: Property<Boolean>
     @get:Internal abstract val dryRun: Property<Boolean>
     @get:Internal abstract val autoPublish: Property<Boolean>
     @get:Internal abstract val artifactId: Property<String>
@@ -57,7 +57,7 @@ abstract class PublishToCentralTask @Inject constructor(
             return
         }
 
-        if (snapshot.get()) {
+        if (isSnapshot.get()) {
             logger.lifecycle(
                 "Snapshot ${artifactId.get()}:${version.get()} was pushed directly to Central's snapshot " +
                     "repository - no bundle/validation step needed for snapshots."

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-09-05
+
+Fixes a Configuration Cache regression introduced in the 1.2.0-1.2.2 line, plus a real (separate) AGP/Dokka crash reported against 1.2.2.
+
+### Fixed
+- **Critical:** `GithubSyncEngine.fetch()` used `runBlocking { retryWithBackoff { ... } }` internally. Since 1.2.0, `PomGenerator` calls this lazily through a `Provider` set on `MavenPom.description`/`.url`/`.scm.url`, and Gradle's `GenerateMavenPom` task caches that Provider's computed value (`Cached.Deferred`) as part of what Configuration Cache serializes. Coroutine continuation "spilling" machinery pulled in by `runBlocking` ends up in that object graph, which CC's serializer cannot handle - exact failure: `Configuration cache state could not be cached: ... Cached$Deferred ... kotlin/coroutines/jvm/internal/SpillingKt`. `fetch()` is now a plain blocking method with its own non-suspending retry loop; no coroutines anywhere in the call chain reachable from a lazy `Provider`. Coroutines remain fine (and unchanged) inside `CentralUploadWorkAction`/`CentralDeployManager`/`CentralPortalClient` - those only ever run inside a Gradle Worker's `execute()`, genuine execution-time code that Configuration Cache never tries to serialize as a deferred computation.
+- Added `org.codirex.publisher.skipAndroidJavadoc` Gradle property (not a DSL option - Android component preparation fires eagerly, before the `publisher { }` block runs) to work around AGP's own Dokka-based javadoc generation crashing on some modern bytecode (e.g. `PermittedSubclasses requires ASM9` against a Kotlin sealed class) - a known AGP+Dokka/ASM incompatibility unrelated to this plugin or the consuming module's own Kotlin version. When set, sources jar generation is unaffected; `MavenPublishOrchestrator` substitutes a plain empty (but present) javadoc jar instead of routing through AGP's Dokka integration, since Central checks for the artifact's presence, not its contents.
+
 ## [1.2.0] - 2026-09-04
 
 A production-hardening pass: this release exists to make the plugin safe to run under Gradle's Configuration Cache and correct across plugin-application ordering, not just to add features.
@@ -75,7 +83,8 @@ Initial release.
 - Built-in license presets: `Licenses.APACHE_2_0`, `MIT`, `GPL_3_0`, `LGPL_2_1`, `BSD_3_CLAUSE`.
 - Tasks: `checkPublisherConfig`, `publishToGithubPackages`, `publishToMavenCentral`, `publishAll`.
 
-[Unreleased]: https://github.com/codirex/publisher/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/codirex/publisher/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/codirex/publisher/compare/v1.2.0...v1.2.3
 [1.2.0]: https://github.com/codirex/publisher/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/codirex/publisher/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/codirex/publisher/releases/tag/v1.0.0

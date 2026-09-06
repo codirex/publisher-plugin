@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.codirex.publisher"
-version = "1.2.1"
+version = "1.2.3"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -31,7 +31,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 
     testImplementation(gradleTestKit())
-    testImplementation("org.jetbrains.kotlin:kotlin-test")
+    testImplementation(gradleApi())
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 gradlePlugin {
@@ -78,7 +85,7 @@ publishing {
                         id.set("codirex")
                         name.set("Codirex")
                         url.set("https://github.com/codirex")
-                                                email.set("codirex2005@gmail.com")
+						email.set("codirex2005@gmail.com")
                     }
                 }
             }

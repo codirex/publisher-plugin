@@ -1,10 +1,7 @@
 package org.codirex.publisher.metadata
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import org.codirex.publisher.util.retryWithBackoff
 import org.json.JSONObject
+import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -28,13 +25,22 @@ data class RepoMetadata(
  * for public repos; if a `GITHUB_TOKEN` env var is present it's sent along
  * to raise the (otherwise low) unauthenticated rate limit.
  *
- * [fetch] stays a plain blocking call (it's invoked from
- * [org.codirex.publisher.dsl.MetadataDsl.resolve], itself called from
- * synchronous Gradle configuration/POM-generation code) but internally
- * retries transient failures - IOExceptions and 5xx responses - with
- * exponential backoff via [retryWithBackoff]. A 404 (repo doesn't exist)
- * or 403 (rate-limited) is not retried; those need the user to fix
- * something, not wait it out.
+ * [fetch] is deliberately plain, blocking, coroutine-free Kotlin - no
+ * `runBlocking`, no `suspend`. This matters more than it looks like it
+ * should: [org.codirex.publisher.metadata.PomGenerator] wires this call
+ * behind a lazy `Provider` set on `MavenPom.description`/`.url`/`.scm.url`,
+ * and Gradle's `GenerateMavenPom` task caches that Provider's computed
+ * value internally (`Cached.Deferred`) as part of the state Configuration
+ * Cache serializes. In 1.2.0-1.2.2 this method used
+ * `runBlocking { retryWithBackoff { ... } }`; that pulled Kotlin's
+ * coroutine continuation "spilling" machinery into the object graph CC
+ * tries to serialize, and CC cannot handle it - the exact failure was
+ * `Configuration cache state could not be cached: ... Cached$Deferred ...
+ * kotlin/coroutines/jvm/internal/SpillingKt`. Coroutines are fine inside a
+ * Gradle `WorkAction.execute()` (real execution-time code, see
+ * [org.codirex.publisher.targets.central.CentralUploadWorkAction]); they
+ * are not safe anywhere reachable from a lazy `Provider`/`Property` that
+ * Gradle itself memoizes. Retries here use a plain blocking loop instead.
  */
 class GithubSyncEngine(
     private val httpClient: HttpClient = HttpClient.newBuilder()
@@ -42,7 +48,7 @@ class GithubSyncEngine(
         .build()
 ) {
 
-    fun fetch(ref: GithubRepoRef): RepoMetadata = runBlocking {
+    fun fetch(ref: GithubRepoRef): RepoMetadata {
         val requestBuilder = HttpRequest.newBuilder()
             .uri(URI.create("https://api.github.com/repos/${ref.fullName}"))
             .header("Accept", "application/vnd.github+json")
@@ -54,12 +60,10 @@ class GithubSyncEngine(
         }
         val request = requestBuilder.build()
 
-        val response = retryWithBackoff(
+        val response = retryBlocking(
             shouldRetryResult = { it.statusCode() >= 500 }
         ) {
-            withContext(Dispatchers.IO) {
-                httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-            }
+            httpClient.send(request, HttpResponse.BodyHandlers.ofString())
         }
         check(response.statusCode() == 200) {
             "GitHub API request for ${ref.fullName} failed with status ${response.statusCode()}: ${response.body()}"
@@ -67,7 +71,7 @@ class GithubSyncEngine(
 
         val json = JSONObject(response.body())
         val license = json.optJSONObject("license")
-        RepoMetadata(
+        return RepoMetadata(
             description = json.optNullableString("description"),
             htmlUrl = json.optNullableString("html_url"),
             cloneUrl = json.optNullableString("clone_url"),
@@ -78,4 +82,29 @@ class GithubSyncEngine(
 
     private fun JSONObject.optNullableString(key: String): String? =
         if (has(key) && !isNull(key)) getString(key) else null
+
+    /** Plain blocking exponential-backoff retry - see the class kdoc for why this can't be `suspend`. */
+    private fun <T> retryBlocking(
+        maxAttempts: Int = 4,
+        initialDelayMs: Long = 500,
+        maxDelayMs: Long = 8_000,
+        factor: Double = 2.0,
+        shouldRetryResult: (T) -> Boolean = { false },
+        shouldRetryException: (Throwable) -> Boolean = { it is IOException },
+        block: () -> T
+    ): T {
+        var delayMs = initialDelayMs
+        repeat(maxAttempts) { attempt ->
+            val isLastAttempt = attempt == maxAttempts - 1
+            try {
+                val result = block()
+                if (isLastAttempt || !shouldRetryResult(result)) return result
+            } catch (e: Throwable) {
+                if (isLastAttempt || !shouldRetryException(e)) throw e
+            }
+            Thread.sleep(delayMs)
+            delayMs = (delayMs * factor).toLong().coerceAtMost(maxDelayMs)
+        }
+        error("unreachable")
+    }
 }
