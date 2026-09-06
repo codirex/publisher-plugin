@@ -3,7 +3,6 @@ package org.codirex.publisher.dsl
 import org.codirex.publisher.metadata.GithubRepoRef
 import org.codirex.publisher.metadata.GithubSyncEngine
 import org.codirex.publisher.metadata.RepoMetadata
-import org.gradle.api.Project
 import org.json.JSONObject
 import java.io.File
 
@@ -11,15 +10,22 @@ import java.io.File
  * `metadata { syncFrom(github("codirex/axiom")); license = Licenses.APACHE_2_0 }`
  *
  * [syncFrom] just records which GitHub repo to pull from; the actual network
- * call happens lazily the first time [resolve] is called (during POM
- * generation), so plain `./gradlew tasks` or offline builds that never touch
+ * call happens lazily the first time [resolve] is called. [PomGenerator]
+ * wires that call behind a `Provider`, so it fires when the POM is actually
+ * *written* (i.e. a publish task executes), not during every configuration
+ * phase - plain `./gradlew tasks` or offline builds that never touch
  * publishing never hit the network.
+ *
+ * Deliberately holds no [org.gradle.api.Project] reference: instances of
+ * this class get captured inside `Provider` lambdas that become inputs of
+ * Gradle's own `GenerateMavenPom` task, and Configuration Cache cannot
+ * serialize anything that transitively holds a live `Project`.
  *
  * Anything set explicitly here - directly, via [developer], or via
  * [loadOverridesFrom] - wins over whatever GitHub sync would have filled in,
  * because [resolve] only fills in fields that are still blank/empty.
  */
-class MetadataDsl(private val project: Project) {
+class MetadataDsl {
 
     var license: License = Licenses.APACHE_2_0
     var description: String = ""
@@ -43,6 +49,23 @@ class MetadataDsl(private val project: Project) {
         _developers += Developer(id, name, email, url, roles)
     }
 
+    /** Bulk alternative to calling [developer] repeatedly, e.g. when building the list programmatically. */
+    fun developers(vararg developers: Developer) {
+        _developers += developers
+    }
+
+    /**
+     * Best-effort, network-free check for whether the generated POM is
+     * likely to have real content in `description`/`url` - either an
+     * explicit value was set, or a GitHub repo is registered to pull one
+     * from. This can't *guarantee* a non-blank POM (a registered repo might
+     * itself have no description on GitHub), but it catches the common
+     * mistake of configuring neither.
+     */
+    fun hasDescriptionSource(): Boolean = description.isNotBlank() || repoRef != null
+    fun hasUrlSource(): Boolean = projectUrl.isNotBlank() || repoRef != null
+    fun hasScmSource(): Boolean = scmUrl.isNotBlank() || repoRef != null
+
     /**
      * Overrides metadata from a JSON file, for teams that keep this
      * centrally rather than duplicating it in every module's build script:
@@ -62,7 +85,11 @@ class MetadataDsl(private val project: Project) {
      */
     fun loadOverridesFrom(file: File) {
         require(file.exists()) { "Metadata override file not found: ${file.absolutePath}" }
-        val json = JSONObject(file.readText())
+        val json = try {
+            JSONObject(file.readText())
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Failed to parse metadata override file ${file.absolutePath}: ${e.message}", e)
+        }
 
         json.optStringOrNull("description")?.let { description = it }
         json.optStringOrNull("projectUrl")?.let { projectUrl = it }
@@ -80,6 +107,9 @@ class MetadataDsl(private val project: Project) {
             _developers.clear()
             for (i in 0 until array.length()) {
                 val dev = array.getJSONObject(i)
+                require(dev.has("id") && dev.has("name")) {
+                    "developers[$i] in ${file.name} is missing required \"id\" or \"name\" field."
+                }
                 _developers += Developer(
                     id = dev.getString("id"),
                     name = dev.getString("name"),

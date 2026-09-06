@@ -1,20 +1,37 @@
 package org.codirex.publisher.metadata
 
 import org.codirex.publisher.dsl.MetadataDsl
+import org.gradle.api.provider.ProviderFactory
 import org.gradle.api.publish.maven.MavenPom
 
 /**
  * Fills a [MavenPom] from a module's [MetadataDsl], preferring values synced
  * from GitHub and falling back to whatever the module set explicitly.
+ *
+ * `description`/`url`/`scm.url` are wired through [ProviderFactory.provider]
+ * rather than resolved eagerly. `MavenPom`'s properties are themselves lazy
+ * `Property<String>`, and the value is only actually computed when Gradle's
+ * `GenerateMavenPom` task runs `.get()` on them - meaning `metadata.resolve()`
+ * (and the GitHub network call it can trigger) fires when a publish task
+ * actually executes, not on every `./gradlew` invocation that merely
+ * configures this project. Whether to *emit* the `<scm>`/`<developers>`
+ * blocks at all is still decided eagerly (that's static DSL state, no
+ * network needed to know it), but their *content* is lazy.
  */
-class PomGenerator(private val metadata: MetadataDsl, private val artifactId: String) {
+class PomGenerator(
+    private val providers: ProviderFactory,
+    private val metadata: MetadataDsl,
+    private val artifactId: String
+) {
 
     fun apply(pom: MavenPom) {
-        val synced = metadata.resolve()
-
         pom.name.set(artifactId)
-        pom.description.set(metadata.description.ifBlank { synced?.description.orEmpty() })
-        pom.url.set(metadata.projectUrl.ifBlank { synced?.htmlUrl.orEmpty() })
+        pom.description.set(providers.provider {
+            metadata.description.ifBlank { metadata.resolve()?.description.orEmpty() }
+        })
+        pom.url.set(providers.provider {
+            metadata.projectUrl.ifBlank { metadata.resolve()?.htmlUrl.orEmpty() }
+        })
 
         pom.licenses { licenses ->
             licenses.license { license ->
@@ -23,12 +40,16 @@ class PomGenerator(private val metadata: MetadataDsl, private val artifactId: St
             }
         }
 
-        val scmUrl = metadata.scmUrl.ifBlank { synced?.cloneUrl.orEmpty() }
-        if (scmUrl.isNotBlank()) {
+        // Whether to emit <scm> at all is static (no network needed to know
+        // it); the actual URL inside it is still lazily resolved.
+        if (metadata.hasScmSource()) {
             pom.scm { scm ->
-                scm.url.set(scmUrl)
-                scm.connection.set("scm:git:$scmUrl")
-                scm.developerConnection.set("scm:git:$scmUrl")
+                val scmUrlProvider = providers.provider {
+                    metadata.scmUrl.ifBlank { metadata.resolve()?.cloneUrl.orEmpty() }
+                }
+                scm.url.set(scmUrlProvider)
+                scm.connection.set(scmUrlProvider.map { "scm:git:$it" })
+                scm.developerConnection.set(scmUrlProvider.map { "scm:git:$it" })
             }
         }
 

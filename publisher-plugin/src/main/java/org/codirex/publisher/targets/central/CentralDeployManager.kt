@@ -25,6 +25,7 @@ class CentralDeployManager(private val client: CentralClient) {
     suspend fun deploy(
         bundle: File,
         dryRun: Boolean = false,
+        publishingType: String = "AUTOMATIC",
         pollIntervalMs: Long = 5000,
         maxAttempts: Int = 60
     ) {
@@ -33,8 +34,16 @@ class CentralDeployManager(private val client: CentralClient) {
             return
         }
 
-        val deploymentId = client.uploadBundle(bundle)
-        logger.lifecycle("Uploaded to Central Portal, deployment id: $deploymentId")
+        val deploymentId = client.uploadBundle(bundle, publishingType)
+        logger.lifecycle("Uploaded to Central Portal, deployment id: $deploymentId (publishingType=$publishingType)")
+
+        if (publishingType == "USER_MANAGED") {
+            logger.lifecycle(
+                "Deployment $deploymentId uploaded for manual review - publish it yourself at " +
+                    "https://central.sonatype.com/publishing/deployments when ready."
+            )
+            return
+        }
 
         repeat(maxAttempts) { attempt ->
             when (val state = client.deploymentStatus(deploymentId)) {

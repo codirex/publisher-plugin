@@ -1,15 +1,13 @@
 package org.codirex.publisher.task
 
-import org.codirex.publisher.credentials.CredentialResolver
-import org.codirex.publisher.dsl.PublishTarget
-import org.codirex.publisher.dsl.PublisherExtension
-import org.codirex.publisher.targets.central.BundleGenerator
 import org.codirex.publisher.targets.central.CentralUploadWorkAction
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 import org.gradle.workers.WorkerExecutor
-import java.io.File
 import javax.inject.Inject
 
 /**
@@ -17,20 +15,35 @@ import javax.inject.Inject
  *  - `-SNAPSHOT` versions: nothing to do here - maven-publish's own
  *    `publish...ToCentralSnapshotsRepository` task (depended on in
  *    PublisherPlugin) already pushed it directly; this just reports that.
- *  - release versions: bundles the local staging repo (populated by
- *    `publish...ToCentralStagingRepository`) into bundle.zip and uploads it
- *    through the Central Portal API via a Gradle Worker, polling until published.
- *  - `dryRun`: bundles (for releases) but never calls the network client.
+ *  - release versions: submits a [CentralUploadWorkAction] that bundles the
+ *    local staging repo (populated by `publish...ToCentralStagingRepository`)
+ *    and uploads it through the Central Portal API, polling until published.
+ *  - `dryRun`: the worker still builds the bundle (so you can inspect it)
+ *    but never calls the network client.
+ *
+ * `centralUsername`/`centralPassword` are `@Internal`, deliberately not
+ * `@Input`: Gradle hashes `@Input` values into the task's up-to-date/build-cache
+ * fingerprint, and secrets have no business ending up in a (potentially
+ * shared/remote) build cache key. Nothing here declares an `@OutputFile`
+ * either - the bundle and the network upload are real side effects, not a
+ * reproducible output Gradle should ever consider skipping via up-to-date checks.
  */
-open class PublishToCentralTask @Inject constructor(
+abstract class PublishToCentralTask @Inject constructor(
     private val workerExecutor: WorkerExecutor
 ) : DefaultTask() {
 
-    @get:Internal
-    lateinit var publisherExtension: PublisherExtension
+    @get:Internal abstract val centralEnabled: Property<Boolean>
+    @get:Internal abstract val snapshot: Property<Boolean>
+    @get:Internal abstract val dryRun: Property<Boolean>
+    @get:Internal abstract val autoPublish: Property<Boolean>
+    @get:Internal abstract val artifactId: Property<String>
+    @get:Internal abstract val version: Property<String>
 
-    @get:Internal
-    lateinit var stagingDir: File
+    @get:Internal abstract val stagingDir: DirectoryProperty
+    @get:Internal abstract val bundleFile: RegularFileProperty
+
+    @get:Internal abstract val centralUsername: Property<String>
+    @get:Internal abstract val centralPassword: Property<String>
 
     init {
         group = "publishing"
@@ -39,33 +52,27 @@ open class PublishToCentralTask @Inject constructor(
 
     @TaskAction
     fun publish() {
-        val ext = publisherExtension
-        if (PublishTarget.MAVEN_CENTRAL !in ext.targets.enabled) {
-            logger.lifecycle("Maven Central not enabled for ${project.path}, skipping.")
+        if (!centralEnabled.get()) {
+            logger.lifecycle("Maven Central not enabled for $path, skipping.")
             return
         }
 
-        if (ext.isSnapshot) {
+        if (snapshot.get()) {
             logger.lifecycle(
-                "Snapshot ${ext.artifactId}:${ext.version} was pushed directly to Central's snapshot " +
+                "Snapshot ${artifactId.get()}:${version.get()} was pushed directly to Central's snapshot " +
                     "repository - no bundle/validation step needed for snapshots."
             )
             return
         }
 
-        val bundle = BundleGenerator(project).createBundle(stagingDir)
-        if (ext.dryRun) {
-            logger.lifecycle("[dry-run] Built ${bundle.absolutePath}; skipping Central Portal upload.")
-            return
-        }
-
-        val credentials = CredentialResolver(project).requireCentral()
         val workQueue = workerExecutor.noIsolation()
         workQueue.submit(CentralUploadWorkAction::class.java) { params ->
-            params.bundlePath.set(bundle)
-            params.username.set(credentials.username)
-            params.password.set(credentials.password)
-            params.dryRun.set(false)
+            params.stagingDir.set(stagingDir)
+            params.bundleFile.set(bundleFile)
+            params.username.set(centralUsername.orElse(""))
+            params.password.set(centralPassword.orElse(""))
+            params.dryRun.set(dryRun)
+            params.autoPublish.set(autoPublish)
         }
         workQueue.await()
     }

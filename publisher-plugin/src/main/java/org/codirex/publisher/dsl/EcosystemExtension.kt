@@ -24,8 +24,9 @@ open class EcosystemExtension @Inject constructor(private val project: Project) 
         project.subprojects { module ->
             module.pluginManager.apply("org.codirex.publisher")
             module.extensions.configure(PublisherExtension::class.java) { ext ->
-                if (baseGroupId.isNotBlank() && ext.identityRef == null) {
-                    ext.identity(baseGroupId, module.name, module.version.toString())
+                val moduleVersion = module.version.toString()
+                if (baseGroupId.isNotBlank() && moduleVersion.isNotBlank() && moduleVersion != "unspecified" && ext.identityRef == null) {
+                    ext.identity(baseGroupId, module.name, moduleVersion)
                 }
                 ext.metadata.license = sharedLicense
                 if (credentials.autoDetectEnabled) {

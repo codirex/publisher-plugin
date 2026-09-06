@@ -1,8 +1,7 @@
 package org.codirex.publisher.task
 
-import org.codirex.publisher.dsl.PublishTarget
-import org.codirex.publisher.dsl.PublisherExtension
 import org.gradle.api.DefaultTask
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 
@@ -12,11 +11,17 @@ import org.gradle.api.tasks.TaskAction
  * task(s), which this depends on (wired in PublisherPlugin, matched by
  * repository name so it also works for multi-publication setups like
  * Kotlin Multiplatform) whenever the target is enabled and it's not a dry run.
+ *
+ * Everything here is `@Internal` (not `@Input`): this task has real
+ * side effects (or depends on tasks that do) and should never be treated as
+ * skippable/up-to-date based on these values - it declares no outputs, so
+ * Gradle always runs it regardless, and that's intentional.
  */
-open class PublishToGithubTask : DefaultTask() {
+abstract class PublishToGithubTask : DefaultTask() {
 
-    @get:Internal
-    lateinit var publisherExtension: PublisherExtension
+    @get:Internal abstract val githubEnabled: Property<Boolean>
+    @get:Internal abstract val dryRun: Property<Boolean>
+    @get:Internal abstract val artifactId: Property<String>
 
     init {
         group = "publishing"
@@ -25,14 +30,10 @@ open class PublishToGithubTask : DefaultTask() {
 
     @TaskAction
     fun report() {
-        val ext = publisherExtension
         when {
-            PublishTarget.GITHUB_PACKAGES !in ext.targets.enabled ->
-                logger.lifecycle("GitHub Packages not enabled for ${project.path}, skipping.")
-            ext.dryRun ->
-                logger.lifecycle("[dry-run] Would publish ${ext.artifactId} to GitHub Packages (upload skipped).")
-            else ->
-                logger.lifecycle("Published ${ext.artifactId} to GitHub Packages.")
+            !githubEnabled.get() -> logger.lifecycle("GitHub Packages not enabled for $path, skipping.")
+            dryRun.get() -> logger.lifecycle("[dry-run] Would publish ${artifactId.get()} to GitHub Packages (upload skipped).")
+            else -> logger.lifecycle("Published ${artifactId.get()} to GitHub Packages.")
         }
     }
 }

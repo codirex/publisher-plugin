@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.codirex.publisher"
-version = "1.1.0"
+version = "1.2.1"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -78,7 +78,7 @@ publishing {
                         id.set("codirex")
                         name.set("Codirex")
                         url.set("https://github.com/codirex")
-						email.set("codirex2005@gmail.com")
+                                                email.set("codirex2005@gmail.com")
                     }
                 }
             }

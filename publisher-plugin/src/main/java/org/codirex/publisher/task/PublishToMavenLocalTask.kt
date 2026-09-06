@@ -1,8 +1,7 @@
 package org.codirex.publisher.task
 
-import org.codirex.publisher.dsl.PublishTarget
-import org.codirex.publisher.dsl.PublisherExtension
 import org.gradle.api.DefaultTask
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 
@@ -12,10 +11,12 @@ import org.gradle.api.tasks.TaskAction
  * regardless of our targets - this just depends on all of them (wired in
  * PublisherPlugin) and reports when the target's actually selected.
  */
-open class PublishToMavenLocalTask : DefaultTask() {
+abstract class PublishToMavenLocalTask : DefaultTask() {
 
-    @get:Internal
-    lateinit var publisherExtension: PublisherExtension
+    @get:Internal abstract val mavenLocalEnabled: Property<Boolean>
+    @get:Internal abstract val groupId: Property<String>
+    @get:Internal abstract val artifactId: Property<String>
+    @get:Internal abstract val version: Property<String>
 
     init {
         group = "publishing"
@@ -24,11 +25,10 @@ open class PublishToMavenLocalTask : DefaultTask() {
 
     @TaskAction
     fun report() {
-        val ext = publisherExtension
-        if (PublishTarget.MAVEN_LOCAL !in ext.targets.enabled) {
-            logger.lifecycle("Maven Local not enabled for ${project.path}, skipping.")
+        if (!mavenLocalEnabled.get()) {
+            logger.lifecycle("Maven Local not enabled for $path, skipping.")
         } else {
-            logger.lifecycle("Published ${ext.groupId}:${ext.artifactId}:${ext.version} to ~/.m2/repository.")
+            logger.lifecycle("Published ${groupId.get()}:${artifactId.get()}:${version.get()} to ~/.m2/repository.")
         }
     }
 }

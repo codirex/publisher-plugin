@@ -1,9 +1,11 @@
 package org.codirex.publisher.engine
 
+import org.codirex.publisher.credentials.CredentialResolver
 import org.codirex.publisher.dsl.PublishTarget
 import org.codirex.publisher.dsl.PublisherExtension
 import org.codirex.publisher.metadata.PomGenerator
 import org.codirex.publisher.targets.github.GithubPackagesClient
+import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
@@ -21,6 +23,10 @@ import org.gradle.api.publish.maven.MavenPublication
  *    publish immediately, see https://central.sonatype.org/publish/publish-portal-snapshots/).
  *  - MAVEN_LOCAL -> nothing to register; maven-publish already creates a
  *    `publish<Pub>PublicationToMavenLocal` task for every publication.
+ *
+ * Only ever used at configuration time (from `PublisherPlugin.configureModule`,
+ * inside `afterEvaluate`) - never stored as task state, so it's fine for this
+ * class to hold `Project` directly.
  */
 class MavenPublishOrchestrator(
     private val project: Project,
@@ -30,19 +36,26 @@ class MavenPublishOrchestrator(
         const val CENTRAL_SNAPSHOTS_URL = "https://central.sonatype.com/repository/maven-snapshots/"
     }
 
+    private val credentials = CredentialResolver(project.providers)
+
     fun configure() {
         project.pluginManager.apply("maven-publish")
 
-        val detector = ComponentDetector(project)
-        val componentType = detector.detect()
-        detector.prepare(componentType)
+        val componentType = ComponentDetector(project).detect()
+        if (componentType == ComponentType.UNKNOWN) {
+            throw GradleException(
+                "Publisher plugin could not detect a publishable component on '${project.path}'. " +
+                    "Apply 'com.android.library', 'java-library', or 'org.jetbrains.kotlin.multiplatform' " +
+                    "before 'org.codirex.publisher'."
+            )
+        }
 
         project.extensions.configure(PublishingExtension::class.java) { publishing ->
             when (componentType) {
                 ComponentType.KOTLIN_MULTIPLATFORM -> configureKotlinMultiplatform(publishing)
                 ComponentType.ANDROID_LIBRARY -> configureSingleComponent(publishing, "release")
                 ComponentType.JAVA_LIBRARY -> configureSingleComponent(publishing, "java")
-                ComponentType.UNKNOWN -> return@configure // detector.prepare() already threw
+                ComponentType.UNKNOWN -> Unit // handled above
             }
 
             registerCentralRepository(publishing)
@@ -57,7 +70,8 @@ class MavenPublishOrchestrator(
             publication.groupId = extension.groupId
             publication.artifactId = extension.artifactId
             publication.version = extension.version
-            PomGenerator(extension.metadata, extension.artifactId).apply(publication.pom)
+            PomGenerator(project.providers, extension.metadata, extension.artifactId).apply(publication.pom)
+            extension.publicationCustomizers.forEach { customize -> publication.customize() }
         }
     }
 
@@ -68,7 +82,8 @@ class MavenPublishOrchestrator(
         publishing.publications.withType(MavenPublication::class.java).configureEach { publication ->
             if (extension.groupId.isNotBlank()) publication.groupId = extension.groupId
             if (extension.version.isNotBlank()) publication.version = extension.version
-            PomGenerator(extension.metadata, publication.artifactId).apply(publication.pom)
+            PomGenerator(project.providers, extension.metadata, publication.artifactId).apply(publication.pom)
+            extension.publicationCustomizers.forEach { customize -> publication.customize() }
         }
     }
 
@@ -78,13 +93,12 @@ class MavenPublishOrchestrator(
         if (extension.isSnapshot) {
             // Snapshots deploy straight to Central's snapshot repo over plain
             // HTTP PUT via maven-publish - no staging/bundle/validate step.
-            val credentials = org.codirex.publisher.credentials.CredentialResolver(project).requireCentral()
             publishing.repositories.maven { repo ->
                 repo.name = "CentralSnapshots"
                 repo.url = project.uri(CENTRAL_SNAPSHOTS_URL)
                 repo.credentials { creds ->
-                    creds.username = credentials.username
-                    creds.password = credentials.password
+                    creds.username = credentials.requireCentralUsername(project.path)
+                    creds.password = credentials.requireCentralPassword(project.path)
                 }
             }
         } else {
@@ -98,10 +112,12 @@ class MavenPublishOrchestrator(
     private fun registerGithubRepository(publishing: PublishingExtension) {
         if (PublishTarget.GITHUB_PACKAGES !in extension.targets.enabled) return
 
-        val repoRef = requireNotNull(extension.metadata.repoRef) {
-            "metadata { syncFrom(github(\"owner/repo\")) } is required to publish " +
-                "'${project.path}' to GitHub Packages."
-        }
-        GithubPackagesClient(project, repoRef.fullName).register()
+        val repoFullName = extension.targets.githubRepoOverride
+            ?: extension.metadata.repoRef?.fullName
+            ?: throw GradleException(
+                "targets { githubPackages() } needs a repo: either metadata { syncFrom(github(\"owner/repo\")) } " +
+                    "or targets { githubPackages(repo = \"owner/repo\") } on '${project.path}'."
+            )
+        GithubPackagesClient(project, repoFullName, credentials).register()
     }
 }
